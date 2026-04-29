@@ -1,2 +1,11 @@
-# RAG_pinecone
-uploading all doctor document
+# Pinecone Document Upload System
+
+## Backend
+cd backend
+pip install -r requirements.txt
+uvicorn main:app --reload --port 8000
+
+## Frontend
+cd frontend
+npm install
+npm start
