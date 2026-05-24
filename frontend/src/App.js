@@ -2,11 +2,26 @@ import React, { useState, useEffect } from "react";
 import "./App.css";
 
 function App() {
-  const [department, setDepartment] = useState("cardiology");
+  const [departments, setDepartments] = useState([]);
+  const [department, setDepartment] = useState("");
   const [files, setFiles] = useState([]);
   const [stats, setStats] = useState([]);
   const [message, setMessage] = useState("");
   const [loading, setLoading] = useState(false);
+
+  // Fetch departments from backend
+  const fetchDepartments = async () => {
+    try {
+      const res = await fetch("/departments");
+      const data = await res.json();
+      if (data.departments && data.departments.length > 0) {
+        setDepartments(data.departments);
+        setDepartment(data.departments[0]); // Set first as default
+      }
+    } catch (err) {
+      console.error("Failed to fetch departments:", err);
+    }
+  };
 
   const fetchStats = async () => {
     try {
@@ -19,6 +34,7 @@ function App() {
   };
 
   useEffect(() => {
+    fetchDepartments();
     fetchStats();
   }, []);
 
@@ -63,11 +79,11 @@ function App() {
         <h3>Upload Documents</h3>
 
         <select value={department} onChange={(e) => setDepartment(e.target.value)}>
-          <option value="cardiology">Cardiology</option>
-          <option value="dentist">Dentist</option>
-          <option value="general-medicine">General Medicine</option>
-          <option value="neurology">Neurology</option>
-          <option value="pulmonology">Pulmonology</option>
+          {departments.map((dept) => (
+            <option key={dept} value={dept}>
+              {dept.charAt(0).toUpperCase() + dept.slice(1).replace("-", " ")}
+            </option>
+          ))}
         </select>
 
         <input

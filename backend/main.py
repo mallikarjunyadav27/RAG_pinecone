@@ -17,9 +17,16 @@ load_dotenv()
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
+DEPARTMENTS_STR = os.getenv("DEPARTMENTS", "")
+PINECONE_INDEX_DIMENSION = int(os.getenv("PINECONE_INDEX_DIMENSION", "3072"))
+PINECONE_CLOUD = os.getenv("PINECONE_CLOUD", "aws")
+PINECONE_REGION = os.getenv("PINECONE_REGION", "us-east-1")
 
-if not OPENAI_API_KEY or not PINECONE_API_KEY:
-    raise ValueError("Missing API keys in .env")
+if not OPENAI_API_KEY or not PINECONE_API_KEY or not DEPARTMENTS_STR:
+    raise ValueError("Missing API keys or DEPARTMENTS in .env")
+
+# Parse departments from .env
+INDEXES = [dept.strip() for dept in DEPARTMENTS_STR.split(",")]
 
 # OpenAI
 client = OpenAI(api_key=OPENAI_API_KEY)
@@ -27,18 +34,23 @@ client = OpenAI(api_key=OPENAI_API_KEY)
 # Pinecone
 pc = Pinecone(api_key=PINECONE_API_KEY)
 
-INDEXES = ["neurology", "general-medicine", "cardiology", "dentist", "pulmonology"]
-
-# Create indexes if not exist
+# Create indexes if not exist (safe - won't affect existing indexes)
 existing = pc.list_indexes().names()
 for idx in INDEXES:
     if idx not in existing:
-        pc.create_index(
-        name=idx,
-        dimension=3072,
-            metric="cosine",
-            spec=ServerlessSpec(cloud="azure", region="eastus2")
-        )
+        try:
+            pc.create_index(
+                name=idx,
+                dimension=PINECONE_INDEX_DIMENSION,
+                metric="cosine",
+                spec=ServerlessSpec(cloud=PINECONE_CLOUD, region=PINECONE_REGION)
+            )
+            print(f"✅ Created index: {idx}")
+        except Exception as e:
+            print(f"⚠️  Could not create index '{idx}': {str(e)[:100]}...")
+            print(f"   Note: Existing indexes remain safe. Please create '{idx}' manually in Pinecone console if needed.")
+    else:
+        print(f"✅ Index exists: {idx}")
 
 app = FastAPI()
 
@@ -83,8 +95,20 @@ def get_embeddings(chunks, batch_size=100):
 def health():
     return {"status": "Backend running"}
 
+@app.get("/departments")
+def get_departments():
+    """Return list of available departments"""
+    return {"departments": INDEXES}
+
 @app.post("/upload")
 async def upload(department: str = Form(...), files: List[UploadFile] = File(...)):
+    # Validate department
+    if department not in INDEXES:
+        return {
+            "error": f"Invalid department: {department}. Valid departments: {', '.join(INDEXES)}",
+            "status": 400
+        }
+    
     index = pc.Index(department)
 
     all_chunks = []
@@ -125,11 +149,26 @@ async def upload(department: str = Form(...), files: List[UploadFile] = File(...
 @app.get("/stats")
 def stats():
     result = []
+    existing_indexes = pc.list_indexes().names()
     for idx in INDEXES:
-        index = pc.Index(idx)
-        info = index.describe_index_stats()
-        result.append({
-            "department": idx,
-            "documents": info.total_vector_count
-        })
+        if idx in existing_indexes:
+            try:
+                index = pc.Index(idx)
+                info = index.describe_index_stats()
+                result.append({
+                    "department": idx,
+                    "documents": info.total_vector_count
+                })
+            except Exception as e:
+                # Include index with 0 documents if there's an error
+                result.append({
+                    "department": idx,
+                    "documents": 0
+                })
+        else:
+            # Index doesn't exist yet, show with 0 documents
+            result.append({
+                "department": idx,
+                "documents": 0
+            })
     return result
