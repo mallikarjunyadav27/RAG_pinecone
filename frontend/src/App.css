@@ -5,7 +5,7 @@ body {
 }
 
 .container {
-  max-width: 800px;
+  max-width: 900px;
   margin: auto;
   padding: 20px;
 }
@@ -13,47 +13,93 @@ body {
 h1 {
   text-align: center;
   color: #333;
+  margin-bottom: 30px;
+}
+
+h3 {
+  color: #007bff;
+  margin-bottom: 20px;
 }
 
 .card {
   background: white;
-  padding: 20px;
+  padding: 25px;
   margin-top: 20px;
   border-radius: 10px;
   box-shadow: 0px 4px 10px rgba(0,0,0,0.1);
 }
 
-select, input {
-  display: block;
-  margin-top: 10px;
-  padding: 8px;
-  width: 100%;
+/* Form Groups */
+.form-group {
+  margin-bottom: 20px;
 }
 
-button {
-  margin-top: 15px;
+.form-group label {
+  display: block;
+  margin-bottom: 8px;
+  font-weight: bold;
+  color: #333;
+}
+
+.form-select, .file-input {
+  display: block;
+  margin-top: 8px;
   padding: 10px;
+  width: 100%;
+  border: 1px solid #ddd;
+  border-radius: 5px;
+  font-size: 14px;
+  box-sizing: border-box;
+}
+
+.form-select:focus, .file-input:focus {
+  outline: none;
+  border-color: #007bff;
+  box-shadow: 0 0 5px rgba(0, 123, 255, 0.3);
+}
+
+/* Checkboxes - Removed (using dropdown instead) */
+
+/* Buttons */
+.upload-btn {
+  margin-top: 20px;
+  padding: 12px;
   background: #007bff;
   color: white;
   border: none;
   width: 100%;
   border-radius: 5px;
   cursor: pointer;
+  font-size: 16px;
+  font-weight: bold;
+  transition: background 0.3s;
 }
 
-button:hover {
+.upload-btn:hover {
   background: #0056b3;
 }
 
-button:disabled {
-  background: gray;
+.upload-btn:disabled {
+  background: #ccc;
+  cursor: not-allowed;
 }
 
+/* Messages */
 .message {
   margin-top: 15px;
+  padding: 12px;
+  border-radius: 5px;
   font-weight: bold;
+  word-wrap: break-word;
 }
 
+.message:contains("✅") {
+  background: #d4edda;
+  color: #155724;
+  border: 1px solid #c3e6cb;
+}
+
+/* Tables */
 table {
   width: 100%;
   margin-top: 15px;
@@ -63,15 +109,30 @@ table {
 th {
   background: #007bff;
   color: white;
-  padding: 10px;
+  padding: 12px;
+  text-align: left;
 }
 
 td {
-  padding: 10px;
+  padding: 12px;
   border-bottom: 1px solid #ddd;
-  text-align: center;
 }
 
 tr:hover {
-  background: #f1f1f1;
+  background: #f8f9fa;
+}
+
+/* Responsive */
+@media (max-width: 600px) {
+  .checkbox-group {
+    grid-template-columns: 1fr;
+  }
+  
+  .container {
+    padding: 10px;
+  }
+  
+  .card {
+    padding: 15px;
+  }
 }

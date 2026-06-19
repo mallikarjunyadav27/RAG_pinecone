@@ -17,16 +17,26 @@ load_dotenv()
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
-DEPARTMENTS_STR = os.getenv("DEPARTMENTS", "")
+INDEXES_STR = os.getenv("INDEXES", "")
 PINECONE_INDEX_DIMENSION = int(os.getenv("PINECONE_INDEX_DIMENSION", "3072"))
 PINECONE_CLOUD = os.getenv("PINECONE_CLOUD", "aws")
 PINECONE_REGION = os.getenv("PINECONE_REGION", "us-east-1")
 
-if not OPENAI_API_KEY or not PINECONE_API_KEY or not DEPARTMENTS_STR:
-    raise ValueError("Missing API keys or DEPARTMENTS in .env")
+if not OPENAI_API_KEY or not PINECONE_API_KEY or not INDEXES_STR:
+    raise ValueError("Missing API keys or INDEXES in .env")
 
-# Parse departments from .env
-INDEXES = [dept.strip() for dept in DEPARTMENTS_STR.split(",")]
+# Parse indexes and their namespaces from .env
+INDEXES = [idx.strip() for idx in INDEXES_STR.split(",")]
+
+# Parse namespaces per index
+INDEX_NAMESPACES = {}
+for idx in INDEXES:
+    # Convert index name to env var format (replace hyphens with underscores)
+    env_key = f"NAMESPACES_{idx.upper().replace('-', '_')}"
+    namespaces_str = os.getenv(env_key, "")
+    if not namespaces_str:
+        raise ValueError(f"Missing {env_key} in .env for index '{idx}'")
+    INDEX_NAMESPACES[idx] = [ns.strip() for ns in namespaces_str.split(",")]
 
 # OpenAI
 client = OpenAI(api_key=OPENAI_API_KEY)
@@ -45,12 +55,12 @@ for idx in INDEXES:
                 metric="cosine",
                 spec=ServerlessSpec(cloud=PINECONE_CLOUD, region=PINECONE_REGION)
             )
-            print(f"✅ Created index: {idx}")
+            print(f"✅ Created index: {idx} with namespaces: {', '.join(INDEX_NAMESPACES[idx])}")
         except Exception as e:
-            print(f"⚠️  Could not create index '{idx}': {str(e)[:100]}...")
+            print(f"⚠️  Could not create index '{idx}': {str(e)}")
             print(f"   Note: Existing indexes remain safe. Please create '{idx}' manually in Pinecone console if needed.")
     else:
-        print(f"✅ Index exists: {idx}")
+        print(f"✅ Index exists: {idx} with namespaces: {', '.join(INDEX_NAMESPACES[idx])}")
 
 app = FastAPI()
 
@@ -95,24 +105,51 @@ def get_embeddings(chunks, batch_size=100):
 def health():
     return {"status": "Backend running"}
 
-@app.get("/departments")
-def get_departments():
-    """Return list of available departments"""
-    return {"departments": INDEXES}
+@app.get("/indexes")
+def get_indexes():
+    """Return list of available indexes"""
+    return {"indexes": INDEXES}
+
+@app.get("/namespaces/{index_name}")
+def get_namespaces(index_name: str):
+    """Return list of available namespaces for a specific index"""
+    if index_name not in INDEXES:
+        return {
+            "error": f"Invalid index: {index_name}. Valid indexes: {', '.join(INDEXES)}",
+            "status": 400
+        }
+    return {"namespaces": INDEX_NAMESPACES[index_name]}
 
 @app.post("/upload")
-async def upload(department: str = Form(...), files: List[UploadFile] = File(...)):
-    # Validate department
-    if department not in INDEXES:
+async def upload(
+    index_name: str = Form(...), 
+    namespaces: str = Form(...),  # comma-separated namespace names
+    files: List[UploadFile] = File(...)
+):
+    """Upload files to specific index and namespaces(s)"""
+    
+    # Validate index
+    if index_name not in INDEXES:
         return {
-            "error": f"Invalid department: {department}. Valid departments: {', '.join(INDEXES)}",
+            "error": f"Invalid index: {index_name}. Valid indexes: {', '.join(INDEXES)}",
             "status": 400
         }
     
-    index = pc.Index(department)
-
+    # Parse and validate namespaces
+    namespace_list = [ns.strip() for ns in namespaces.split(",")]
+    valid_namespaces = INDEX_NAMESPACES[index_name]
+    
+    for ns in namespace_list:
+        if ns not in valid_namespaces:
+            return {
+                "error": f"Invalid namespace '{ns}' for index '{index_name}'. Valid namespaces: {', '.join(valid_namespaces)}",
+                "status": 400
+            }
+    
+    index = pc.Index(index_name)
     all_chunks = []
 
+    # Extract text from all files
     for file in files:
         text = await extract_text(file)
         # Split by newlines and filter out very small chunks
@@ -121,54 +158,81 @@ async def upload(department: str = Form(...), files: List[UploadFile] = File(...
 
     embeddings = get_embeddings(all_chunks)
 
-    vectors = []
-    for chunk, emb in zip(all_chunks, embeddings):
-        chunk_id = hashlib.sha256(chunk.encode()).hexdigest()
-        vectors.append({
-            "id": chunk_id,
-            "values": emb,
-            "metadata": {
-                "text": chunk,
-                "department": department,
-                "organization": os.getenv("ORGANIZATION_NAME", "Unknown"),
-                "timestamp": str(datetime.utcnow())
-            }
-        })
+    # Upsert to all specified namespaces
+    total_uploaded = 0
+    for namespace in namespace_list:
+        vectors = []
+        for chunk, emb in zip(all_chunks, embeddings):
+            chunk_id = hashlib.sha256((chunk + namespace).encode()).hexdigest()  # Unique ID per namespace
+            vectors.append({
+                "id": chunk_id,
+                "values": emb,
+                "metadata": {
+                    "text": chunk,
+                    "namespace": namespace,
+                    "index": index_name,
+                    "organization": os.getenv("ORGANIZATION_NAME", "Unknown"),
+                    "timestamp": str(datetime.utcnow())
+                }
+            })
 
-    BATCH_SIZE = 50  # safe size
-
-    for i in range(0, len(vectors), BATCH_SIZE):
-        batch = vectors[i:i + BATCH_SIZE]
-        index.upsert(vectors=batch)
+        BATCH_SIZE = 50  # safe size
+        for i in range(0, len(vectors), BATCH_SIZE):
+            batch = vectors[i:i + BATCH_SIZE]
+            index.upsert(vectors=batch, namespace=namespace)
+        
+        total_uploaded += len(vectors)
 
     return {
-        "message": "Upload successful",
-        "chunks_uploaded": len(vectors)
+        "message": f"Upload successful to {len(namespace_list)} namespace(s)",
+        "index": index_name,
+        "namespaces": namespace_list,
+        "chunks_uploaded": total_uploaded
     }
 
 @app.get("/stats")
 def stats():
+    """Return stats for all indexes and their namespaces"""
     result = []
     existing_indexes = pc.list_indexes().names()
+    
     for idx in INDEXES:
         if idx in existing_indexes:
             try:
                 index = pc.Index(idx)
+                # Get stats for the index (includes all namespaces)
                 info = index.describe_index_stats()
-                result.append({
-                    "department": idx,
-                    "documents": info.total_vector_count
-                })
+                
+                # Get stats for each namespace
+                for namespace in INDEX_NAMESPACES[idx]:
+                    # Check if namespace exists in the stats response
+                    if hasattr(info, 'namespaces') and info.namespaces:
+                        ns_data = info.namespaces.get(namespace, {})
+                        vector_count = ns_data.get('vector_count', 0) if isinstance(ns_data, dict) else getattr(ns_data, 'vector_count', 0)
+                    else:
+                        vector_count = 0
+                    
+                    result.append({
+                        "index": idx,
+                        "namespace": namespace,
+                        "documents": vector_count
+                    })
             except Exception as e:
-                # Include index with 0 documents if there's an error
+                print(f"Error getting stats for index {idx}: {str(e)}")
+                # If error, show all namespaces with 0
+                for namespace in INDEX_NAMESPACES[idx]:
+                    result.append({
+                        "index": idx,
+                        "namespace": namespace,
+                        "documents": 0
+                    })
+        else:
+            # Index doesn't exist yet, show all namespaces with 0
+            for namespace in INDEX_NAMESPACES[idx]:
                 result.append({
-                    "department": idx,
+                    "index": idx,
+                    "namespace": namespace,
                     "documents": 0
                 })
-        else:
-            # Index doesn't exist yet, show with 0 documents
-            result.append({
-                "department": idx,
-                "documents": 0
-            })
+    
     return result
